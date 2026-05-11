@@ -2,8 +2,8 @@
 name: vllm-profiler
 description: >
   采集并分析 vLLM Ascend 推理服务的 NPU profiling 数据。
-  当用户提到 profiling、性能分析、trace、NPU 流分析、性能采集、双流并行验证，
-  或需要确认某个特性（如双流并行）在图模式中是否生效时，使用此 skill。
+  当用户提到 profiling、性能分析、trace、NPU 流分析、性能采集，
+  或需要确认某个特性在图模式中是否生效时，使用此 skill。
 ---
 
 # vLLM Ascend Profiling 采集器
@@ -25,7 +25,7 @@ description: >
 
 ## 步骤1: 环境检查
 
-采集前检查三项：
+采集前检查两项：
 
 ### 1.1 服务存活
 
@@ -46,16 +46,6 @@ curl -s http://<server_url>/v1/models
 （通常为 `"./vllm_prof"`），profiling 输出将落在此目录。
 
 如果没有 `--profiler-config`，警告用户 profiling 不会产生数据。
-
-### 1.3 特性开关
-
-如果用户要验证特定特性（如双流并行），检查 `--additional-config`：
-
-```bash
-grep "additional-config" <启动脚本>
-```
-
-输出当前状态：`"dsa_dual_stream": true` 或 `"dsa_dual_stream": false`。
 
 ---
 
@@ -98,7 +88,6 @@ grep "additional-config" <启动脚本>
   模型:        deepseek_v4
   请求:        "你好，请简单的介绍你自己。" (max_tokens=128)
   输出目录:    ./vllm_prof/
-  特性状态:    dsa_dual_stream=true
 ```
 
 请用户确认。
@@ -203,13 +192,11 @@ analyse("<profiler_dir>/<rank_dir>")
 ### 可选分析项：
 
 1. **流分布** — NPU 流有哪些，各自的 task 数量、wall time、compute time。
-   这是验证双流并行的主要手段。
    ```sql
    SELECT streamId, COUNT(*) FROM TASK GROUP BY streamId ORDER BY COUNT(*) DESC
    ```
 
-2. **DSA 算子分布** — QuantBatchMatmul、DynamicQuant、ScatterNdUpdate、
-   Rotary、QLI 在各流上的计数。可判断 weights_proj 是否在独立子流上执行。
+2. **算子分布** — 按算子名称在各流上的分布计数，判断特定算子是否在独立流上执行。
    ```sql
    SELECT t.streamId, COUNT(*) FROM TASK t
    JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId = cti.globalTaskId
@@ -222,14 +209,6 @@ analyse("<profiler_dir>/<rank_dir>")
 4. **自定义分析** — 用户指定 SQL 查询或分析目标。
 
 分析结果以清晰表格呈现。
-
-### 双流并行验证对照表
-
-| 场景 | 预期 |
-|---|---|
-| c4 双流开启 | DSA 算子分布在主流+子流，约 2:1 比例 |
-| c4 双流关闭 | 所有 DSA 算子仅在主流图中，无独立子流 |
-| c128 层 | 无索引器算子 |
 
 ---
 
@@ -273,27 +252,3 @@ tar czf <output_dir>/vllm_prof_<描述>_rank<N>.tar.gz \
 | 打包输出目录 | `./prof_docs/` |
 
 用户可在每一步覆盖以上默认值。
-
----
-
-## 常用分析模式
-
-### 验证双流并行已生效
-
-```
-预期: DSA 算子（QBM, DQ, SND, Rotary, QLI）分布在至少2条流上，约 2:1 比例
-关键流: streamId=X（主流）+ streamId=Y（子流）
-同步: aclrtStreamWaitEvent 计数 > 0
-```
-
-### 验证双流并行已关闭
-
-```
-预期: 所有 DSA 算子在 1~2 条主流图上，无承载 DSA 算子的独立子流
-关键流: streamId=A + streamId=B（均为主流，不同图尺寸）
-同步: aclrtStreamWaitEvent 可能为 multistream_overlap_shared_expert 产生
-```
-
-### 查看算子热点
-
-查询 `operator_details.csv`，按总耗时排序找出热点算子。
