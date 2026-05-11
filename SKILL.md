@@ -1,78 +1,69 @@
 ---
 name: vllm-profiler
 description: >
-  Collect and analyze NPU profiling data for vLLM Ascend inference services.
-  Use this skill whenever the user wants to profile, benchmark, trace, verify
-  dual-stream parallelism, or analyze NPU stream/operator performance on
-  Ascend hardware. Triggers on mentions of profiling, profiler, trace, npu
-  stream analysis, performance capture, or when they want to verify whether
-  a feature (like dual-stream) is active in the compiled graph.
+  采集并分析 vLLM Ascend 推理服务的 NPU profiling 数据。
+  当用户提到 profiling、性能分析、trace、NPU 流分析、性能采集、双流并行验证，
+  或需要确认某个特性（如双流并行）在图模式中是否生效时，使用此 skill。
 ---
 
-# vLLM Ascend Profiling Collector
+# vLLM Ascend Profiling 采集器
 
-Collect NPU profiling traces from a running vLLM Ascend service, parse them via
-`torch_npu.profiler.analyse()`, analyze stream and operator behavior from the
-SQLite database, and package results for sharing.
+从正在运行的 vLLM Ascend 服务中采集 NPU profiling trace，使用
+`torch_npu.profiler.analyse()` 解析，通过 SQLite 数据库分析流和算子行为，
+并将解析结果打包以便分享。
 
-## Workflow Overview
+## 整体流程
 
 ```
-[Step 1: ENV CHECK] → [Step 2: CONFIGURE REQUEST] → [Step 3: CONFIRM & WARMUP]
-→ [Step 4: COLLECT PROFILING] → [Step 5: PARSE DATA] → [Step 6: ANALYZE]
-→ [Step 7: PACKAGE]
+[步骤1: 环境检查] → [步骤2: 配置请求] → [步骤3: 确认并预热]
+→ [步骤4: 采集数据] → [步骤5: 解析数据] → [步骤6: 分析] → [步骤7: 打包]
 ```
 
-Each step prompts the user for confirmation or input before proceeding. Do NOT
-skip steps or make assumptions about what the user wants.
+每步都需要和用户确认后才能继续，**不能跳过或自行假设**。
 
 ---
 
-## Step 1: Environment Check
+## 步骤1: 环境检查
 
-Before any profiling, verify three things:
+采集前检查三项：
 
-### 1.1 Service health
+### 1.1 服务存活
 
 ```bash
 curl -s http://<server_url>/v1/models
 ```
 
-If this fails, tell the user and stop. Ask them to restart the service.
+如果失败，告知用户并停止，请用户先启动服务。
 
-Default `server_url`: `http://127.0.0.1:7000`. Let the user override it.
+默认 `server_url`: `http://127.0.0.1:7000`，允许用户覆盖。
 
-### 1.2 Profiling config in start script
+### 1.2 Profiling 配置
 
-Read the service startup script (ask the user for its path, or check common
-locations like `start_test.sh`, `start.sh`). Look for `--profiler-config` in
-the arguments.
+读取服务启动脚本（询问用户路径，或检查常见位置如 `start_test.sh`）。
+查找 `--profiler-config` 参数。
 
-Confirm the profiler type is `"torch"` and note the `torch_profiler_dir` value
-(usually `"./vllm_prof"` or similar). This is where profiling output will land.
+确认 profiler 类型为 `"torch"`，记录 `torch_profiler_dir` 的值
+（通常为 `"./vllm_prof"`），profiling 输出将落在此目录。
 
-If `--profiler-config` is missing, warn the user that profiling won't produce
-output without it.
+如果没有 `--profiler-config`，警告用户 profiling 不会产生数据。
 
-### 1.3 Additional config (for targeted analysis)
+### 1.3 特性开关
 
-If the user wants to verify a specific feature (e.g. dual-stream), check the
-`--additional-config` for the relevant toggle:
+如果用户要验证特定特性（如双流并行），检查 `--additional-config`：
 
 ```bash
-grep "additional-config" <start_script>
+grep "additional-config" <启动脚本>
 ```
 
-Report the current state: `"dsa_dual_stream": true` or `"dsa_dual_stream": false`.
+输出当前状态：`"dsa_dual_stream": true` 或 `"dsa_dual_stream": false`。
 
 ---
 
-## Step 2: Configure the Inference Request
+## 步骤2: 配置推理请求
 
-Show the user the inference request that will run during profiling. This is
-what drives the GPU/NPU computation that gets traced.
+向用户展示将在 profiling 期间执行的推理请求。
 
-### 2.1 Default request template
+### 2.1 默认请求模板
 
 ```json
 {
@@ -83,108 +74,105 @@ what drives the GPU/NPU computation that gets traced.
 }
 ```
 
-### 2.2 Let the user customize
+### 2.2 可自定义参数
 
-Ask the user:
-- **Model name**: default `deepseek_v4`
-- **Prompt content**: default `"你好，请简单的介绍你自己。"`
-- **Max tokens**: default `128`
-- **Any other request parameters** (e.g. extra headers, streaming, etc.)
+向用户确认：
+- **Model**: 默认 `deepseek_v4`
+- **Prompt**: 默认 `"你好，请简单的介绍你自己。"`
+- **Max tokens**: 默认 `128`
+- **其他参数**（如 headers、stream 等）
 
-Print the final curl command that will be used, and wait for confirmation.
-
----
-
-## Step 3: Confirm and (Optionally) Warmup
-
-### 3.1 Confirm the collection plan
-
-Summarize what will happen:
-
-```
-Profiling plan:
-  Server:    http://127.0.0.1:7000
-  Model:     deepseek_v4
-  Request:   "你好，请简单的介绍你自己。" (max_tokens=128)
-  Output:    ./vllm_prof/
-  Feature:   dsa_dual_stream=true
-```
-
-Ask the user to confirm.
-
-### 3.2 Warmup (optional, ask first)
-
-Ask: "是否需要在正式采集前先 warmup？"
-
-If yes, run the same inference request 1-3 times WITHOUT starting the profiler.
-This ensures the model is fully loaded and compiled graphs are ready.
-
-```
-Warmup: curl <same request>  →  discard output
-Warmup: curl <same request>  →  discard output
-Warmup: curl <same request>  →  discard output
-```
-
-If no, skip to Step 4.
+打印最终 curl 命令，等待用户确认。
 
 ---
 
-## Step 4: Collect Profiling
+## 步骤3: 确认并预热
 
-### 4.1 Clear old data
+### 3.1 确认采集计划
+
+总结展示：
+
+```
+采集计划:
+  服务地址:    http://127.0.0.1:7000
+  模型:        deepseek_v4
+  请求:        "你好，请简单的介绍你自己。" (max_tokens=128)
+  输出目录:    ./vllm_prof/
+  特性状态:    dsa_dual_stream=true
+```
+
+请用户确认。
+
+### 3.2 预热（可选）
+
+询问用户：**"是否需要在正式采集前先 warmup？"**
+
+如果需要，在**不启动 profiler** 的情况下执行同一条推理请求 1~3 次：
+
+```
+预热: curl <同一条请求>  →  丢弃输出
+预热: curl <同一条请求>  →  丢弃输出
+预热: curl <同一条请求>  →  丢弃输出
+```
+
+如果不需要，直接进入步骤4。
+
+---
+
+## 步骤4: 采集 Profiling 数据
+
+### 4.1 清理旧数据
 
 ```bash
 rm -rf <profiler_dir>/*
 ```
 
-### 4.2 Start profiling
+### 4.2 启动 profiling
 
 ```bash
 curl -s -X POST http://<server>/start_profile -H "Content-Type: application/json"
 ```
 
-Check HTTP 200. If it fails, the profiling API may not be available — tell the user.
+检查 HTTP 200。如果失败，告知用户 profiling API 可能不可用。
 
-### 4.3 Run the inference request
+### 4.3 执行推理请求
 
-Execute the curl command from Step 2. Print the truncated output to confirm
-the request completed normally.
+执行步骤2中确认的 curl 命令。截断输出内容展示，确认请求正常完成。
 
-### 4.4 Stop profiling
+### 4.4 停止 profiling
 
 ```bash
 curl -s -X POST http://<server>/stop_profile -H "Content-Type: application/json"
 ```
 
-### 4.5 Locate the profiling data
+### 4.5 定位数据
 
-Under `<profiler_dir>/`, find the rank-specific directories:
+在 `<profiler_dir>/` 下查找各 rank 的目录：
 
 ```bash
 ls <profiler_dir>/dp0_pp0_tp0_dcp0_ep0_rank0_*
 ```
 
-Each rank has two directories:
-- `*_ascend_pt/` with `FRAMEWORK/` + `PROF_*/` subdirectories (raw NPU trace)
-- `*_ascend_pt/` with `profiler_info_*.json` (metadata only)
+每个 rank 有两个目录：
+- `*_ascend_pt/` 含 `FRAMEWORK/` + `PROF_*/` 子目录（原始 NPU trace）
+- `*_ascend_pt/` 仅含 `profiler_info_*.json`（元数据）
 
-The directories with `FRAMEWORK` subdirectories contain the actual profiling
-data for that rank.
+含有 `FRAMEWORK` 子目录的才是实际 profiling 数据目录。
 
 ---
 
-## Step 5: Parse Data
+## 步骤5: 解析数据
 
-### 5.1 Ask: parse all ranks or specific rank?
+### 5.1 询问解析范围
 
-Ask: "是否需要解析所有 rank 的数据，还是只解析指定 rank？"
+询问用户：**"是否需要解析所有 rank 的数据，还是只解析指定 rank？"**
 
-- **All ranks**: iterate over each rank directory with `FRAMEWORK/` present
-- **Specific rank**: the user picks one (default: rank0 for stream analysis)
+- **所有 rank**: 遍历每个含 `FRAMEWORK/` 的 rank 目录
+- **指定 rank**: 默认 rank0（对流分析已足够）
 
-### 5.2 Run analyse()
+### 5.2 执行 analyse()
 
-For each selected rank directory:
+对每个选中的 rank 目录：
 
 ```python
 from torch_npu.profiler.profiler import analyse
@@ -192,123 +180,120 @@ from torch_npu.profiler.profiler import analyse
 analyse("<profiler_dir>/<rank_dir>")
 ```
 
-This creates `ASCEND_PROFILER_OUTPUT/` inside the rank directory containing:
-- `ascend_pytorch_profiler.db` (or `ascend_pytorch_profiler_0.db`) — main trace DB
-- `trace_view.json` — Chrome trace for visualization
-- `operator_details.csv` — per-operator breakdown
-- `kernel_details.csv` — per-kernel breakdown
-- `analysis.db` — comm analysis
-- `op_statistic.csv` — operator statistics
+这会在 rank 目录下创建 `ASCEND_PROFILER_OUTPUT/`，包含：
+- `ascend_pytorch_profiler.db`（或 `ascend_pytorch_profiler_0.db`）— 主 trace 数据库
+- `trace_view.json` — Chrome trace 可视化数据
+- `operator_details.csv` — 逐算子明细
+- `kernel_details.csv` — 逐 kernel 明细
+- `analysis.db` — 通信分析
+- `op_statistic.csv` — 算子统计
 
-Note: `analyse()` may take 3-5 minutes per rank.
+注意：`analyse()` 每个 rank 约需 3~5 分钟。
 
-### 5.3 Verify parsing success
+### 5.3 验证解析完成
 
-Check that `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler*.db` exists and is
-non-empty for each parsed rank.
+检查 `ASCEND_PROFILER_OUTPUT/ascend_pytorch_profiler*.db` 存在且非空。
 
 ---
 
-## Step 6: Analyze
+## 步骤6: 分析数据
 
-After parsing, ask the user what analysis they want:
+解析完成后，询问用户需要哪些分析：
 
-### Default analysis options to offer:
+### 可选分析项：
 
-1. **Stream distribution** — Which NPU streams exist, their task counts, wall
-   time, and compute time. This is the primary tool for verifying dual-stream
-   parallelism.
+1. **流分布** — NPU 流有哪些，各自的 task 数量、wall time、compute time。
+   这是验证双流并行的主要手段。
    ```sql
    SELECT streamId, COUNT(*) FROM TASK GROUP BY streamId ORDER BY COUNT(*) DESC
    ```
 
-2. **DSA operator distribution** — QuantBatchMatmul, DynamicQuant,
-   ScatterNdUpdate, Rotary, QLI counts per stream. Reveals whether
-   weights_proj is correctly on a sub-stream.
+2. **DSA 算子分布** — QuantBatchMatmul、DynamicQuant、ScatterNdUpdate、
+   Rotary、QLI 在各流上的计数。可判断 weights_proj 是否在独立子流上执行。
    ```sql
    SELECT t.streamId, COUNT(*) FROM TASK t
-   JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId=cti.globalTaskId
-   JOIN STRING_IDS s ON cti.name=s.id
+   JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId = cti.globalTaskId
+   JOIN STRING_IDS s ON cti.name = s.id
    WHERE s.value LIKE '%<operator>%' GROUP BY t.streamId
    ```
 
-3. **Stream synchronization** — Count `aclrtStreamWaitEvent` calls to
-   verify cross-stream sync is happening.
+3. **流同步** — 统计 `aclrtStreamWaitEvent` 调用次数，判断跨流同步是否发生。
 
-4. **Custom analysis** — The user can specify their own SQL queries or
-   analysis goals.
+4. **自定义分析** — 用户指定 SQL 查询或分析目标。
 
-Present findings in a clear table format. For dual-stream verification,
-compare against the expected pattern:
-- c4 dual-stream: DSA ops on main stream + sub-stream with ~2:1 ratio
-- c4 dual-stream OFF: all DSA ops on main graph streams only
-- c128: no indexer ops at all
+分析结果以清晰表格呈现。
+
+### 双流并行验证对照表
+
+| 场景 | 预期 |
+|---|---|
+| c4 双流开启 | DSA 算子分布在主流+子流，约 2:1 比例 |
+| c4 双流关闭 | 所有 DSA 算子仅在主流图中，无独立子流 |
+| c128 层 | 无索引器算子 |
 
 ---
 
-## Step 7: Package
+## 步骤7: 打包
 
-### 7.1 Ask for output location
+### 7.1 询问输出位置
 
-Ask: "将解析后的数据打包到哪个目录下？"
+**"将解析后的数据打包到哪个目录下？"** 默认目录：`./prof_docs/`
 
-Default: the current working directory or `./prof_docs/`.
+### 7.2 打包（仅 ASCEND_PROFILER_OUTPUT）
 
-### 7.2 Create tar.gz (ASCEND_PROFILER_OUTPUT only)
-
-Only package the parsed output, not the raw FRAMEWORK/PROF data:
+**只打包解析后的数据**，不包含原始 FRAMEWORK/PROF 数据：
 
 ```bash
-tar czf <output_dir>/vllm_prof_<description>_rank<N>.tar.gz \
+tar czf <output_dir>/vllm_prof_<描述>_rank<N>.tar.gz \
   -C <profiler_dir>/<rank_dir> \
   ASCEND_PROFILER_OUTPUT
 ```
 
-### 7.3 Report
+### 7.3 输出
 
-Print the archive path and size:
+打印文件路径和大小：
 
 ```
-Packaged: <output_dir>/vllm_prof_*.tar.gz (XXX MB)
+已打包: <output_dir>/vllm_prof_*.tar.gz (XXX MB)
 ```
 
 ---
 
-## Default Configuration Reference
+## 默认参数配置
 
-| Parameter | Default Value |
+| 参数 | 默认值 |
 |---|---|
-| Server URL | `http://127.0.0.1:7000` |
-| Profiler dir | `./vllm_prof/` (from `torch_profiler_dir`) |
-| Model | `deepseek_v4` |
+| 服务地址 | `http://127.0.0.1:7000` |
+| Profiler 输出目录 | `./vllm_prof/`（来自 `torch_profiler_dir`） |
+| 模型 | `deepseek_v4` |
 | Prompt | `"你好，请简单的介绍你自己。"` |
 | Max tokens | `128` |
 | Temperature | `0` |
-| Default rank | `rank0` |
-| Output dir | `./prof_docs/` |
+| 默认 rank | `rank0` |
+| 打包输出目录 | `./prof_docs/` |
 
-All of these can be overridden by the user at each step.
+用户可在每一步覆盖以上默认值。
 
 ---
 
-## Common Analysis Patterns
+## 常用分析模式
 
-### Verify dual-stream is ON
-
-```
-Expected: DSA ops (QBM, DQ, SND, Rotary, QLI) on at least 2 streams with ~2:1 ratio
-Key stream: streamId=X (main) + streamId=Y (sub)
-Sync: aclrtStreamWaitEvent count > 0
-```
-
-### Verify dual-stream is OFF
+### 验证双流并行已生效
 
 ```
-Expected: All DSA ops on 1-2 main graph streams, NO standalone sub-stream with DSA ops
-Key streams: streamId=A + streamId=B (both main, different graph sizes)
-Sync: aclrtStreamWaitEvent may be present (from multistream_overlap_shared_expert)
+预期: DSA 算子（QBM, DQ, SND, Rotary, QLI）分布在至少2条流上，约 2:1 比例
+关键流: streamId=X（主流）+ streamId=Y（子流）
+同步: aclrtStreamWaitEvent 计数 > 0
 ```
 
-### Check operator hot spots
+### 验证双流并行已关闭
 
-Query `operator_details.csv` for top operators by total duration.
+```
+预期: 所有 DSA 算子在 1~2 条主流图上，无承载 DSA 算子的独立子流
+关键流: streamId=A + streamId=B（均为主流，不同图尺寸）
+同步: aclrtStreamWaitEvent 可能为 multistream_overlap_shared_expert 产生
+```
+
+### 查看算子热点
+
+查询 `operator_details.csv`，按总耗时排序找出热点算子。
