@@ -14,9 +14,9 @@ description: >
 
 # Profiling Data Analysis
 
-Analyze parsed NPU profiling data from `ascend_pytorch_profiler*.db` to
-understand stream distribution, operator behavior, feature verification
-(e.g., dual-stream parallelism), and performance characteristics.
+Analyze parsed NPU profiling data from `ascend_pytorch_profiler*.db` to help
+users understand stream distribution, operator behavior, feature verification,
+or any question they have about their NPU trace data.
 
 ## Core Principle: Confirm Before Conclude
 
@@ -29,21 +29,8 @@ before analyzing further.** It saves hours of wasted work.
 
 ## How to Interact with the User
 
-Use the `question` tool (not free-text) to ask the user for input and
-confirmation. Provide structured options when possible. This makes the
-interaction faster and more precise.
-
-```python
-# Always use question tool like this:
-# question(questions=[{
-#     "question": "The question to ask",
-#     "header": "Short label",
-#     "options": [
-#         {"label": "Option A", "description": "..."},
-#         {"label": "Option B", "description": "..."}
-#     ]
-# }])
-```
+Use the `question` tool (not free-text) to ask for input and confirmation.
+Provide structured options when possible.
 
 ---
 
@@ -51,8 +38,9 @@ interaction faster and more precise.
 
 ```
 [Phase 1: Understand Requirements]
-  ├── Clarify the user's question
-  └── Understand the service config (which features are on/off)
+  ├── Clarify the user's question and analysis goal
+  ├── Understand the service config (which features are on/off)
+  └── Confirm with user
 
 [Phase 2: Know the Code → Operator Mapping]
   ├── Identify which code paths and operators are relevant
@@ -61,15 +49,15 @@ interaction faster and more precise.
 
 [Phase 3: Survey the Data]
   ├── Enumerate all streams and their operators
-  ├── Identify each stream's role
-  └── Present the overview, let the user correct
+  ├── Report time windows per stream
+  └── Let the user identify what matters
 
 [Phase 4: Targeted Drill-down]
-  ├── Based on user confirmation, run targeted queries
-  ├── Verify specific conclusions with timing analysis
+  ├── Based on user guidance, run targeted queries
+  ├── Verify specific conclusions with timing/overlap analysis
   └── Present findings incrementally
 
-[Phase 5: Package & Report]
+[Phase 5: Report]
   ├── Summarize findings in clear table format
   └── Let the user decide next steps
 ```
@@ -78,40 +66,38 @@ interaction faster and more precise.
 
 ## Phase 1: Understand Requirements
 
-Before touching any SQL query, understand:
+Before touching any SQL query, understand what the user needs.
 
-### 1.1 What is the user trying to verify?
+### 1.1 Clarify the analysis goal
 
-Use the `question` tool to narrow down the analysis goal:
+Use the `question` tool to narrow down:
 
 ```python
 question(questions=[{
     "header": "分析目标",
-    "question": "你想验证哪方面的特性？",
+    "question": "你想从 profiling 数据中了解什么？",
     "options": [
-        {"label": "DSA双流并行", "description": "验证 weights_proj 是否在独立流上执行，与 scatter/q_quant 重叠"},
-        {"label": "流分布概览", "description": "查看所有 NPU 流上有哪些算子"},
-        {"label": "特定算子定位", "description": "查看某个算子在哪些流上执行"},
+        {"label": "流分布概览", "description": "查看所有 NPU 流上有哪些算子和任务分布"},
+        {"label": "特定特性验证", "description": "验证某个功能（如双流并行、MTP 等）是否生效"},
+        {"label": "特定算子定位", "description": "查看某个算子/代码路径在哪些流上执行"},
+        {"label": "性能热点分析", "description": "找出耗时最长的算子和热点路径"},
         {"label": "其他", "description": "我来描述具体需求"}
     ]
 }])
 ```
 
-### 1.2 What config was the service running with?
+Based on the user's choice, proceed with the appropriate focus.
 
-Check the startup script for:
-- `dsa_dual_stream`: true or false
-- `multistream_overlap_shared_expert`: true or false
-- `cudagraph_mode`: FULL_DECODE_ONLY or other
-- capture batch sizes
+### 1.2 Confirm the service configuration
 
-These directly affect stream assignment in the profiler.
+Check the startup script for configuration parameters that affect profiling
+behavior. Look for:
+- Feature toggles in `--additional-config` (e.g., `dsa_dual_stream`,
+  `multistream_overlap_shared_expert`, etc.)
+- `--compilation-config` options (e.g., `cudagraph_mode`)
+- `--profiler-config` settings
 
-**Always present this config info to the user and confirm** before proceeding.
-Different configs produce radically different stream patterns.
-
-**Use the `question` tool** to let the user confirm or override the config
-readings. Example:
+Present findings and use `question` tool to confirm:
 
 ```python
 question(questions=[{
@@ -124,25 +110,23 @@ question(questions=[{
 }])
 ```
 
-If the user says the config is wrong, ask them to provide the correct values.
+The config context is critical for interpreting profiling results correctly.
 
 ---
 
 ## Phase 2: Know the Code → Operator Mapping
 
 This is the MOST COMMON SOURCE OF ERROR. Do NOT guess which NPU operator
-corresponds to which code path. Instead:
+corresponds to which code path.
 
 ### 2.1 Identify relevant code paths
 
-Ask the user or read the code to find which code path is being analyzed:
-- e.g., `_kv_compressor_forward` → involves `compressor`, `scatter`,
-  `weights_proj`, `q_quant`, `QLI`
-- e.g., `_indexer_qkv_prepare` → involves `rotary`, `rmsnorm`
+Ask the user or read the code to find which code paths are relevant to
+their analysis goal.
 
-### 2.2 Map code to operator names
+### 2.2 Present operator mapping for confirmation
 
-**List your understanding explicitly with the `question` tool:**
+List your understanding and use the `question` tool:
 
 ```python
 question(questions=[{
@@ -150,12 +134,12 @@ question(questions=[{
     "question": "以下算子映射关系是否正确？",
     "options": [
         {"label": "映射正确", "description": "继续分析"},
-        {"label": "有误，部分不对", "description": "我来纠正"}
+        {"label": "部分不对", "description": "我来纠正"}
     ]
 }])
 ```
 
-Present your mapping in the question description like:
+Example presentation (adjust based on actual analysis goal):
 
 ```
 My understanding of the operator mappings:
@@ -167,106 +151,90 @@ My understanding of the operator mappings:
   QKV projection  → QuantBatchMatmulV3_xxx
 ```
 
-DO NOT assume. The `QuantBatchMatmulV3` operator could be QKV attention or
-weights_proj depending on the model. ASK FIRST via the `question` tool.
+DO NOT assume operator-to-code mappings. The same operator name can serve
+different purposes in different contexts. ASK FIRST via the `question` tool.
 
-If the user selects "有误，部分不对", wait for them to provide corrections
-before proceeding.
+### 2.3 Identify relevant streams
 
-### 2.3 Identify relevant stream IDs
-
-If the user already knows which streams to look at, use that. If not, start
-with a complete stream survey (Phase 3).
+If the user already knows which streams to look at, use that. If not,
+start with a complete stream survey (Phase 3).
 
 ---
 
 ## Phase 3: Survey the Data
 
-### 3.1 Basic survey query
+### 3.1 Full stream survey
 
-Query ALL streams for DSA-relevant operators:
+Query ALL streams for operator distribution. The specific operators to
+check depend on the analysis goal from Phase 1.
+
+General pattern:
 
 ```sql
 SELECT t.streamId,
-  SUM(CASE WHEN s.value LIKE '%QuantBatchMatmul%' THEN 1 ELSE 0 END) as QBM,
-  SUM(CASE WHEN s.value LIKE '%MatMulV2%' THEN 1 ELSE 0 END) as MatMulV2,
-  SUM(CASE WHEN s.value LIKE '%ScatterNdUpdate%' THEN 1 ELSE 0 END) as SND,
-  SUM(CASE WHEN s.value LIKE '%Compressor%' THEN 1 ELSE 0 END) as Compressor,
-  SUM(CASE WHEN s.value LIKE '%DynamicQuant%' THEN 1 ELSE 0 END) as DQ,
-  SUM(CASE WHEN s.value LIKE '%Rotary%' THEN 1 ELSE 0 END) as Rotary,
-  SUM(CASE WHEN s.value LIKE '%QuantLightningIndexer%' THEN 1 ELSE 0 END) as QLI
+  COUNT(*) as total_tasks,
+  SUM(CASE WHEN s.value LIKE '%<op1>%' THEN 1 ELSE 0 END) as op1,
+  SUM(CASE WHEN s.value LIKE '%<op2>%' THEN 1 ELSE 0 END) as op2,
+  ...
 FROM TASK t
 JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId = cti.globalTaskId
 JOIN STRING_IDS s ON cti.name = s.id
 GROUP BY t.streamId ORDER BY t.streamId
 ```
 
-### 3.2 Present findings with the `question` tool
+### 3.2 Report time windows
 
-After showing the data table, use the `question` tool to let the user
-identify the stream roles:
+```sql
+SELECT streamId, MIN(startNs)/1e6, MAX(startNs)/1e6,
+       (MAX(startNs)-MIN(startNs))/1e6 as dur_ms,
+       COUNT(*) as tasks
+FROM TASK GROUP BY streamId ORDER BY streamId
+```
+
+### 3.3 Use `question` tool to get user's interpretation
+
+After showing the overview, let the user interpret:
 
 ```python
 question(questions=[{
     "header": "确认流角色",
-    "question": "根据以上数据，你认为哪个流是 DSA 子流？",
+    "question": "根据以上数据，你能判断各流的角色吗？",
     "options": [
-        {"label": "流XX是子流", "description": "该流只有 weights_proj，无其他 DSA 算子"},
-        {"label": "流YY是子流", "description": "描述你的理由"},
-        {"label": "看不出，继续分析", "description": "我来补充其他信息"}
+        {"label": "我已判断，继续钻取", "description": "指定要分析的流和算子"},
+        {"label": "不清楚，需要更多信息", "description": "我来补充分析方向"},
+        {"label": "流分布异常", "description": "发现问题需要讨论"}
     ]
 }])
 ```
 
-Let the user interpret the data before you do. If they disagree with your
-preliminary assessment, adjust accordingly.
-
-**Do NOT jump to conclusions about which stream is "main" vs "sub" without
-the user's input.** The user knows their configuration and architecture better
-than you do.
-
-### 3.3 Report time windows
-
-```sql
-SELECT streamId, MIN(startNs)/1e6, MAX(startNs)/1e6,
-       (MAX(startNs)-MIN(startNs))/1e6 as dur_ms
-FROM TASK GROUP BY streamId ORDER BY streamId
-```
-
-This reveals whether streams run in the same time window (overlap) or in
-distinct phases (sequential).
+Do NOT jump to conclusions about stream roles without the user's input.
 
 ---
 
 ## Phase 4: Targeted Drill-down
 
-Once the user confirms the stream mapping, run targeted queries.
+Based on the user's guidance from Phase 3, run specific analyses.
 
 ### 4.1 Timing overlap analysis
 
 To check if two streams execute in parallel:
 
-```python
-# Find 1ms buckets where both streams have active tasks
-# This only makes sense AFTER confirming which operators/streams to check
+```sql
 SELECT COUNT(*) FROM (
   SELECT FLOOR(startNs / 1000000) FROM TASK
-  WHERE streamId = <sub> AND <operator_condition>
+  WHERE streamId = <A> AND <condition_A>
   INTERSECT
   SELECT FLOOR(startNs / 1000000) FROM TASK
-  WHERE streamId = <main> AND <operator_condition>
+  WHERE streamId = <B> AND <condition_B>
 )
 ```
 
-### 4.2 Detailed timeline
-
-For a specific time window, show the exact sequence of operators on each
-stream. This helps verify concurrent execution.
+### 4.2 Detailed timeline for a time window
 
 ```sql
 SELECT startNs/1e6, streamId,
-  CASE WHEN s.value LIKE '%A%' THEN 'label_a'
-       WHEN s.value LIKE '%B%' THEN 'label_b'
+  CASE WHEN s.value LIKE '%X%' THEN 'label_x'
+       WHEN s.value LIKE '%Y%' THEN 'label_y'
        ELSE 'other' END as tag
 FROM TASK t
 JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId=cti.globalTaskId
@@ -276,34 +244,37 @@ AND startNs BETWEEN <t0> AND <t1>
 ORDER BY startNs
 ```
 
-### 4.3 Time offset critical check
+### 4.3 Time offset clarity check
 
-When the user says "from 694ms", ALWAYS clarify the reference point using
-the `question` tool:
+When the user mentions a relative time (e.g., "from 694ms"), ALWAYS
+clarify the reference point using the `question` tool:
 
 ```python
 question(questions=[{
     "header": "确认时间偏移",
-    "question": "你说的 694ms 是从哪个流开始算的？",
+    "question": "你说的 {N}ms 是从哪个起点算的？",
     "options": [
-        {"label": "从子流(63)起点", "description": "流63起点 + 694ms"},
-        {"label": "从主流(64)起点", "description": "流64起点 + 694ms"},
+        {"label": "从流{X}起点", "description": "流{X}的 startNs + {N}ms"},
+        {"label": "从流{Y}起点", "description": "流{Y}的 startNs + {N}ms"},
         {"label": "绝对时间戳", "description": "我提供具体的绝对时间戳"}
     ]
 }])
 ```
 
-**Common mistake**: computing relative time from the wrong stream's startNs.
-The same relative offset can mean different absolute times for different
-streams (as much as 13+ms apart).
+### 4.4 Further iteration
 
-### 4.4 Stream sync verification
+After showing drill-down results, use the `question` tool:
 
-Cross-stream synchronization:
-```sql
-SELECT COUNT(*) FROM CANN_API ca
-JOIN STRING_IDS s ON ca.name=s.id
-WHERE s.value = 'aclrtStreamWaitEvent'
+```python
+question(questions=[{
+    "header": "下一步",
+    "question": "需要继续深入分析吗？",
+    "options": [
+        {"label": "继续分析其他方面", "description": "指定新的分析方向"},
+        {"label": "已完成，生成报告", "description": "总结发现"},
+        {"label": "打包数据", "description": "将解析后的数据打包"}
+    ]
+}])
 ```
 
 ---
@@ -312,30 +283,22 @@ WHERE s.value = 'aclrtStreamWaitEvent'
 
 When presenting findings:
 
-1. **Use a clear comparison table** showing operator counts per stream
+1. **Use clear comparison tables** showing operator counts per stream
 2. **Note the total time window** and overlap duration for each stream
-3. **State the conclusion clearly** — whether dual-stream is ON or OFF
-4. **Explain WHY** based on the data, not just the conclusion
-5. **Acknowledge uncertainty** — e.g., "the profiler sees all ops on one
+3. **State the conclusion clearly** — what the data says and what it means
+4. **Acknowledge uncertainty** — e.g., "the profiler sees all ops on one
    stream, but this may be a graph compilation artifact"
+5. **Use `question` to confirm** if the findings address the user's need
 
-### Example report structure
-
-```
-## Conclusion: DSA Dual-Stream IS Active
-
-Evidence:
-- Stream 63 has 630 MatMulV2 (weights_proj) and 0 scatter/QLI → sub-stream
-- Stream 64 has 1140 SND + 600 Compressor + 3150 QBM → main stream
-- 300/812 1ms buckets have both streams active simultaneously → 37% overlap
-- aclrtStreamWaitEvent: 667 cross-stream sync calls
-
-## Conclusion: DSA Dual-Stream NOT Active
-
-Evidence:
-- Stream 61 has ALL DSA ops (QBM, DQ, SND, Rotary, QLI) → single stream
-- Stream 64 also has ALL DSA ops → different graph size, not sub-stream
-- No stream has weights_proj alone without scatter/QLI
+```python
+question(questions=[{
+    "header": "报告确认",
+    "question": "以上分析是否回答了你的问题？",
+    "options": [
+        {"label": "已满足需求", "description": "分析完成"},
+        {"label": "还需补充", "description": "说明需要补充的内容"}
+    ]
+}])
 ```
 
 ---
@@ -343,25 +306,26 @@ Evidence:
 ## Common Pitfalls to Avoid
 
 ### ❌ Wrong: Assuming operator-to-code mappings
-"QuantBatchMatmul must be weights_proj" — WRONG. It could be QKV attention.
-Always confirm mappings with the user.
+Always confirm mappings with the user. The same operator name can have
+different meanings in different models/configurations.
 
-### ❌ Wrong: Ignoring non-DSA streams
-A stream with Muls + MatMulV2 (stream 63) may be the real weights_proj stream.
-Check ALL streams, not just the ones with obvious DSA operators.
+### ❌ Wrong: Ignoring non-obvious streams
+A stream with few tasks may still be the critical one. Check ALL streams
+when doing initial survey.
 
 ### ❌ Wrong: Computing relative offset from the wrong baseline
-The user says "694ms" — from which stream's start? Different streams have
-different start times (sometimes 13+ms apart). Clarify before computing.
+Different streams have different start times. Clarify the reference point
+before computing time offsets.
 
 ### ❌ Wrong: Drawing negative conclusions from missing data
-"No separate sub-stream visible" does not mean "dual-stream not working."
-Graph compilation may merge streams. The user knows their config.
+"Not visible in profiling" does not mean "not working." The ACL graph
+runtime may merge streams or optimize away intermediate operations.
 
 ### ❌ Wrong: Confusing graph instances with parallel streams
-Two streams each with all DSA ops (QBM, SND, QLI) are likely different
-captured graph sizes, NOT main+sub streams.
+Two streams each with the same set of operators are likely different
+captured graph sizes (different batch sizes), not separate functional
+streams for parallel execution.
 
-### ✅ Right: Incremental presentation
-Show a stream overview first. Let the user interpret it. Then drill down.
-Don't jump to conclusions.
+### ❌ Wrong: Diving into data without user direction
+Always clarify the analysis goal and confirm mappings before running
+SQL queries. This prevents wasted effort on irrelevant analysis.
