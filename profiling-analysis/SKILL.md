@@ -1,76 +1,69 @@
 ---
 name: profiling-analysis
 description: >
-  Analyze parsed NPU profiling data (torch_npu.profiler.analyse() output) from
-  vLLM Ascend inference services. This skill is specifically for INTERPRETING
-  and UNDERSTANDING profiling data that has already been collected and parsed.
-  It is NOT for collecting or packaging profiling data — use the vllm-profiler
-  skill for that. Use this skill whenever the user has parsed profiling data
-  (ascend_pytorch_profiler.db) and wants to understand stream distribution,
-  operator placement, dual-stream parallelism, or any behavior visible in the
-  NPU trace. Also use this skill when the user asks to "analyze" or "check"
-  something in profiling data they already have.
+  分析已解析的 NPU profiling 数据（torch_npu.profiler.analyse() 输出）。
+  本 skill 专门用于 INTERPRETING（解读）和 UNDERSTANDING（理解）已经采集并
+  解析好的 profiling 数据。它不负责采集或打包——采集请使用 vllm-profiler skill。
+  当用户已有解析好的 profiling 数据（ascend_pytorch_profiler.db），想要了解
+  NPU 流分布、算子放置、特性验证或任何 trace 中可见的行为时，使用此 skill。
+  也适用于用户请求"分析"或"检查"已有 profiling 数据时。
 ---
 
-# Profiling Data Analysis
+# Profiling 数据分析
 
-Analyze parsed NPU profiling data from `ascend_pytorch_profiler*.db` to help
-users understand stream distribution, operator behavior, feature verification,
-or any question they have about their NPU trace data.
+分析已解析的 NPU profiling 数据（`ascend_pytorch_profiler*.db`），帮助用户
+理解流分布、算子行为、特性验证，或回答与 NPU trace 相关的任何问题。
 
-## Core Principle: Confirm Before Conclude
+## 核心原则：先确认再下结论
 
-Profiling analysis is full of traps: wrong operator assumptions, misidentified
-stream roles, incorrect time offsets, conflated concepts. Before drawing any
-conclusion, ALWAYS confirm your understanding with the user.
+Profiling 分析充满陷阱：错误的算子假设、错认的流角色、不正确的时间偏移、
+混淆的概念。在下结论之前，**始终与用户确认你的理解**。
 
-**The single most important rule: if you are not sure about something, ask
-before analyzing further.** It saves hours of wasted work.
+**最重要的规则：不确定就问。** 先问清楚再继续分析，可以避免数小时的无效工作。
 
-## How to Interact with the User
+## 用户交互方式
 
-Use the `question` tool (not free-text) to ask for input and confirmation.
-Provide structured options when possible.
+使用 `question` 工具（而非自由文本）向用户寻求确认。尽可能提供结构化选项。
 
 ---
 
-## Analysis Workflow
+## 分析流程
 
 ```
-[Phase 1: Understand Requirements]
-  ├── Clarify the user's question and analysis goal
-  ├── Understand the service config (which features are on/off)
-  └── Confirm with user
+[Phase 1: 理解需求]
+  ├── 明确用户的问题和分析目标
+  ├── 确认服务配置（哪些特性开启）
+  └── 与用户确认
 
-[Phase 2: Know the Code → Operator Mapping]
-  ├── Identify which code paths and operators are relevant
-  ├── List your understanding of the mapping
-  └── CONFIRM WITH THE USER before querying data
+[Phase 2: 代码 → 算子映射]
+  ├── 确定相关的代码路径和算子
+  ├── 列出你的理解
+  └── 查数据前先与用户确认
 
-[Phase 3: Survey the Data]
-  ├── Enumerate all streams and their operators
-  ├── Report time windows per stream
-  └── Let the user identify what matters
+[Phase 3: 全量扫描]
+  ├── 枚举所有流及其算子
+  ├── 报告各流的时间窗口
+  └── 让用户判断哪些流重要
 
-[Phase 4: Targeted Drill-down]
-  ├── Based on user guidance, run targeted queries
-  ├── Verify specific conclusions with timing/overlap analysis
-  └── Present findings incrementally
+[Phase 4: 定向钻取]
+  ├── 基于用户指引运行定向查询
+  ├── 用时序/重叠分析验证
+  └── 逐步展示发现
 
-[Phase 5: Report]
-  ├── Summarize findings in clear table format
-  └── Let the user decide next steps
+[Phase 5: 报告]
+  ├── 用表格清晰展示发现
+  └── 让用户决定下一步
 ```
 
 ---
 
-## Phase 1: Understand Requirements
+## Phase 1: 理解需求
 
-Before touching any SQL query, understand what the user needs.
+查数据前，先理解用户需要什么。
 
-### 1.1 Clarify the analysis goal
+### 1.1 明确分析目标
 
-Use the `question` tool to narrow down:
+使用 `question` 工具缩小范围：
 
 ```python
 question(questions=[{
@@ -86,18 +79,17 @@ question(questions=[{
 }])
 ```
 
-Based on the user's choice, proceed with the appropriate focus.
+根据用户选择确定分析重点。
 
-### 1.2 Confirm the service configuration
+### 1.2 确认服务配置
 
-Check the startup script for configuration parameters that affect profiling
-behavior. Look for:
-- Feature toggles in `--additional-config` (e.g., `dsa_dual_stream`,
-  `multistream_overlap_shared_expert`, etc.)
-- `--compilation-config` options (e.g., `cudagraph_mode`)
-- `--profiler-config` settings
+检查启动脚本中影响 profiling 行为的配置参数。重点关注：
+- `--additional-config` 中的特性开关（如 `dsa_dual_stream`、
+  `multistream_overlap_shared_expert` 等）
+- `--compilation-config` 选项（如 `cudagraph_mode`）
+- `--profiler-config` 设置
 
-Present findings and use `question` tool to confirm:
+展示发现并用 `question` 工具确认：
 
 ```python
 question(questions=[{
@@ -110,23 +102,21 @@ question(questions=[{
 }])
 ```
 
-The config context is critical for interpreting profiling results correctly.
+配置上下文是正确解读 profiling 结果的关键。
 
 ---
 
-## Phase 2: Know the Code → Operator Mapping
+## Phase 2: 代码 → 算子映射
 
-This is the MOST COMMON SOURCE OF ERROR. Do NOT guess which NPU operator
-corresponds to which code path.
+这是最常见的错误来源。**不要猜测** NPU 算子与代码路径的对应关系。
 
-### 2.1 Identify relevant code paths
+### 2.1 确定相关代码路径
 
-Ask the user or read the code to find which code paths are relevant to
-their analysis goal.
+询问用户或阅读代码，找到与分析目标相关的代码路径。
 
-### 2.2 Present operator mapping for confirmation
+### 2.2 呈现算子映射并确认
 
-List your understanding and use the `question` tool:
+列出你的理解，用 `question` 工具确认：
 
 ```python
 question(questions=[{
@@ -139,42 +129,40 @@ question(questions=[{
 }])
 ```
 
-Example presentation (adjust based on actual analysis goal):
+示例呈现（根据实际分析目标调整）：
 
 ```
-My understanding of the operator mappings:
-  weights_proj    → MatMulV2 (FP16 matmul)
+我的算子映射理解：
+  weights_proj    → MatMulV2 (FP16 矩阵乘)
   kv_compressor   → Compressor_xxx
   kv_scatter      → ScatterNdUpdateV2_xxx
   q_quant         → DynamicQuant_xxx
   QLI             → QuantLightningIndexer_xxx
-  QKV projection  → QuantBatchMatmulV3_xxx
+  QKV 投影        → QuantBatchMatmulV3_xxx
 ```
 
-DO NOT assume operator-to-code mappings. The same operator name can serve
-different purposes in different contexts. ASK FIRST via the `question` tool.
+**不要假设**算子到代码的映射。同一个算子名在不同上下文中可能代表不同的
+功能。通过 `question` 工具先问清楚。
 
-### 2.3 Identify relevant streams
+### 2.3 确定目标流
 
-If the user already knows which streams to look at, use that. If not,
-start with a complete stream survey (Phase 3).
+如果用户已经知道要看哪些流，直接使用。否则从全量扫描开始（Phase 3）。
 
 ---
 
-## Phase 3: Survey the Data
+## Phase 3: 全量扫描
 
-### 3.1 Full stream survey
+### 3.1 全流算子查询
 
-Query ALL streams for operator distribution. The specific operators to
-check depend on the analysis goal from Phase 1.
+查询所有流的算子分布。具体查询哪些算子取决于分析目标。
 
-General pattern:
+通用查询模板：
 
 ```sql
 SELECT t.streamId,
   COUNT(*) as total_tasks,
-  SUM(CASE WHEN s.value LIKE '%<op1>%' THEN 1 ELSE 0 END) as op1,
-  SUM(CASE WHEN s.value LIKE '%<op2>%' THEN 1 ELSE 0 END) as op2,
+  SUM(CASE WHEN s.value LIKE '%<算子1>%' THEN 1 ELSE 0 END) as op1,
+  SUM(CASE WHEN s.value LIKE '%<算子2>%' THEN 1 ELSE 0 END) as op2,
   ...
 FROM TASK t
 JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId = cti.globalTaskId
@@ -182,7 +170,7 @@ JOIN STRING_IDS s ON cti.name = s.id
 GROUP BY t.streamId ORDER BY t.streamId
 ```
 
-### 3.2 Report time windows
+### 3.2 报告时间窗口
 
 ```sql
 SELECT streamId, MIN(startNs)/1e6, MAX(startNs)/1e6,
@@ -191,9 +179,9 @@ SELECT streamId, MIN(startNs)/1e6, MAX(startNs)/1e6,
 FROM TASK GROUP BY streamId ORDER BY streamId
 ```
 
-### 3.3 Use `question` tool to get user's interpretation
+### 3.3 让用户判断
 
-After showing the overview, let the user interpret:
+展示概览后，用 `question` 工具让用户判断：
 
 ```python
 question(questions=[{
@@ -207,47 +195,47 @@ question(questions=[{
 }])
 ```
 
-Do NOT jump to conclusions about stream roles without the user's input.
+没有用户确认，不要自行下结论。
 
 ---
 
-## Phase 4: Targeted Drill-down
+## Phase 4: 定向钻取
 
-Based on the user's guidance from Phase 3, run specific analyses.
+根据用户在 Phase 3 中指引的方向，执行特定分析。
 
-### 4.1 Timing overlap analysis
+### 4.1 时序重叠分析
 
-To check if two streams execute in parallel:
+检查两条流是否并行执行：
 
 ```sql
 SELECT COUNT(*) FROM (
   SELECT FLOOR(startNs / 1000000) FROM TASK
-  WHERE streamId = <A> AND <condition_A>
+  WHERE streamId = <A> AND <条件_A>
   INTERSECT
   SELECT FLOOR(startNs / 1000000) FROM TASK
-  WHERE streamId = <B> AND <condition_B>
+  WHERE streamId = <B> AND <条件_B>
 )
 ```
 
-### 4.2 Detailed timeline for a time window
+### 4.2 特定时间窗口的详细时序
 
 ```sql
 SELECT startNs/1e6, streamId,
-  CASE WHEN s.value LIKE '%X%' THEN 'label_x'
-       WHEN s.value LIKE '%Y%' THEN 'label_y'
-       ELSE 'other' END as tag
+  CASE WHEN s.value LIKE '%X%' THEN '标签_x'
+       WHEN s.value LIKE '%Y%' THEN '标签_y'
+       ELSE '其他' END as tag
 FROM TASK t
 JOIN COMPUTE_TASK_INFO cti ON t.globalTaskId=cti.globalTaskId
 JOIN STRING_IDS s ON cti.name=s.id
-WHERE streamId IN (<streams>)
+WHERE streamId IN (<流列表>)
 AND startNs BETWEEN <t0> AND <t1>
 ORDER BY startNs
 ```
 
-### 4.3 Time offset clarity check
+### 4.3 时间偏移量确认
 
-When the user mentions a relative time (e.g., "from 694ms"), ALWAYS
-clarify the reference point using the `question` tool:
+当用户提到相对时间（如"从 694ms 开始"），必须用 `question` 工具
+确认参考点：
 
 ```python
 question(questions=[{
@@ -261,9 +249,11 @@ question(questions=[{
 }])
 ```
 
-### 4.4 Further iteration
+不同流的 start 时间可能相差 13ms 以上，选错参考点会导致完全错误的分析。
 
-After showing drill-down results, use the `question` tool:
+### 4.4 进一步迭代
+
+展示钻取结果后，用 `question` 工具确认下一步：
 
 ```python
 question(questions=[{
@@ -279,16 +269,15 @@ question(questions=[{
 
 ---
 
-## Phase 5: Report
+## Phase 5: 报告
 
-When presenting findings:
+展示分析结果时：
 
-1. **Use clear comparison tables** showing operator counts per stream
-2. **Note the total time window** and overlap duration for each stream
-3. **State the conclusion clearly** — what the data says and what it means
-4. **Acknowledge uncertainty** — e.g., "the profiler sees all ops on one
-   stream, but this may be a graph compilation artifact"
-5. **Use `question` to confirm** if the findings address the user's need
+1. **用清晰的对比表格**展示各流的算子计数
+2. **注明时间窗口**和流间重叠时长
+3. **明确陈述结论** — 数据说明了什么，意味着什么
+4. **承认不确定性** — 例如"profiler 将所有算子合并到同一条流上，但这可能是图编译的产物"
+5. **用 `question` 确认**分析结果是否满足用户需求
 
 ```python
 question(questions=[{
@@ -303,29 +292,23 @@ question(questions=[{
 
 ---
 
-## Common Pitfalls to Avoid
+## 常见陷阱
 
-### ❌ Wrong: Assuming operator-to-code mappings
-Always confirm mappings with the user. The same operator name can have
-different meanings in different models/configurations.
+### ❌ 错误：假设算子到代码的映射
+务必与用户确认映射关系。同一个算子名在不同模型/配置下意义可能完全不同。
 
-### ❌ Wrong: Ignoring non-obvious streams
-A stream with few tasks may still be the critical one. Check ALL streams
-when doing initial survey.
+### ❌ 错误：忽略非明显的流
+任务数少的流可能反而是关键流。全量扫描时检查**所有**流。
 
-### ❌ Wrong: Computing relative offset from the wrong baseline
-Different streams have different start times. Clarify the reference point
-before computing time offsets.
+### ❌ 错误：从错误基线计算相对偏移
+不同流的 start 时间不同。计算偏移前先和用户确认参考点。
 
-### ❌ Wrong: Drawing negative conclusions from missing data
-"Not visible in profiling" does not mean "not working." The ACL graph
-runtime may merge streams or optimize away intermediate operations.
+### ❌ 错误：从缺失数据得出否定结论
+"profiler 中看不到"不等于"没生效"。ACL 图运行时可能合并流或优化掉中间操作。
 
-### ❌ Wrong: Confusing graph instances with parallel streams
-Two streams each with the same set of operators are likely different
-captured graph sizes (different batch sizes), not separate functional
-streams for parallel execution.
+### ❌ 错误：混淆图实例与并行流
+两条流包含相同算子集合时，通常是不通的 batch size 的 captured graph，
+而不是功能上独立的并行流。
 
-### ❌ Wrong: Diving into data without user direction
-Always clarify the analysis goal and confirm mappings before running
-SQL queries. This prevents wasted effort on irrelevant analysis.
+### ❌ 错误：未经用户方向就钻取数据
+先确认分析目标和算子映射，再执行 SQL 查询。避免在无关方向上浪费时间。
