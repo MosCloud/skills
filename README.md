@@ -7,10 +7,48 @@ vLLM Ascend 开发相关的 Claude Code / Cowork skills。
 将 `.skill` 文件放入 `~/.agents/skills/` 目录：
 
 ```bash
-cp */<skill-name>.skill ~/.agents/skills/
+cp <skill-name>/<skill-name>.skill ~/.agents/skills/
 ```
 
-重新加载后 skills 自动生效。
+重新加载后 skills 自动生效。历史版本可在 `archive/` 目录下查看：
+
+```bash
+git checkout v1.0  # 查看 skills 归档版本
+```
+
+## 开发
+
+添加新 skill：
+
+```bash
+mkdir <skill-name>/
+# 编写 SKILL.md
+# 生成 .skill 打包文件
+python3 -m scripts.package_skill <skill-path>
+
+# 提交
+git add <skill-name>/
+git commit -s -m "feat: add <skill-name> skill"
+git push
+```
+
+更新已有 skill：
+
+```bash
+# 1. 归档当前版本
+cp <skill-name>/SKILL.md <skill-name>/archive/v{N}.0_SKILL.md
+cp <skill-name>/<skill-name>.skill <skill-name>/archive/v{N}.0.skill
+
+# 2. 修改 SKILL.md
+
+# 3. 更新 HISTORY.md 追加新版本记录
+
+# 4. 提交并打 tag
+git add <skill-name>/
+git commit -s -m "<module>: bump to v{N+1}.0"
+git tag v{N+1}.0
+git push origin main --tags
+```
 
 ## Skills
 
@@ -37,6 +75,28 @@ cp */<skill-name>.skill ~/.agents/skills/
 - 跨流时序重叠分析
 - 特定特性验证（双流并行等）
 - 性能热点分析
+
+## 版本归档
+
+skills 使用 git tag 管理版本。每个版本的归档文件在对应 skill 的 `archive/` 目录下：
+
+```
+vllm-profiler/
+├── SKILL.md                    # 当前版本
+├── vllm-profiler.skill
+├── HISTORY.md
+└── archive/
+    ├── v1.0_SKILL.md           # v1.0 归档
+    └── v1.0.skill
+
+profiling-analysis/
+├── SKILL.md                    # 当前版本
+├── profiling-analysis.skill
+├── HISTORY.md
+└── archive/
+    ├── v1.0_SKILL.md
+    └── v1.0.skill
+```
 
 ## 开发
 

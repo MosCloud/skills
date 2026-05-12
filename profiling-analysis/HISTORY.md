@@ -15,3 +15,14 @@
 - 跨流时序重叠分析
 - 特定特性验证（双流并行等）
 - 使用 question 工具进行结构化交互
+
+---
+
+### 版本归档
+
+更新版本时，将当前版本的以下文件复制到 `archive/` 目录，再修改 SKILL.md：
+
+- `archive/v{N}.0_SKILL.md` — 当前版本的 SKILL.md 快照
+- `archive/v{N}.0.skill` — 当前版本的 .skill 打包文件
+
+然后在 HISTORY.md 中追加新版本记录，提交并打 tag。
