@@ -27,6 +27,24 @@ conclusion, ALWAYS confirm your understanding with the user.
 **The single most important rule: if you are not sure about something, ask
 before analyzing further.** It saves hours of wasted work.
 
+## How to Interact with the User
+
+Use the `question` tool (not free-text) to ask the user for input and
+confirmation. Provide structured options when possible. This makes the
+interaction faster and more precise.
+
+```python
+# Always use question tool like this:
+# question(questions=[{
+#     "question": "The question to ask",
+#     "header": "Short label",
+#     "options": [
+#         {"label": "Option A", "description": "..."},
+#         {"label": "Option B", "description": "..."}
+#     ]
+# }])
+```
+
 ---
 
 ## Analysis Workflow
@@ -64,13 +82,20 @@ Before touching any SQL query, understand:
 
 ### 1.1 What is the user trying to verify?
 
-Common analysis goals:
-- **Dual-stream parallelism**: Is weights_proj running on a separate stream
-  from compressor/scatter/q_quant/QLI?
-- **Stream distribution**: What are all the NPU streams and what runs on each?
-- **Operator placement**: Where does a specific operator execute?
-- **Performance**: What are the hotspots?
-- **Feature verification**: Confirm a feature is working as designed.
+Use the `question` tool to narrow down the analysis goal:
+
+```python
+question(questions=[{
+    "header": "分析目标",
+    "question": "你想验证哪方面的特性？",
+    "options": [
+        {"label": "DSA双流并行", "description": "验证 weights_proj 是否在独立流上执行，与 scatter/q_quant 重叠"},
+        {"label": "流分布概览", "description": "查看所有 NPU 流上有哪些算子"},
+        {"label": "特定算子定位", "description": "查看某个算子在哪些流上执行"},
+        {"label": "其他", "description": "我来描述具体需求"}
+    ]
+}])
+```
 
 ### 1.2 What config was the service running with?
 
@@ -84,6 +109,22 @@ These directly affect stream assignment in the profiler.
 
 **Always present this config info to the user and confirm** before proceeding.
 Different configs produce radically different stream patterns.
+
+**Use the `question` tool** to let the user confirm or override the config
+readings. Example:
+
+```python
+question(questions=[{
+    "header": "确认配置",
+    "question": "以上配置是否正确？",
+    "options": [
+        {"label": "配置正确", "description": "按此配置继续分析"},
+        {"label": "配置有误", "description": "我来提供正确的配置信息"}
+    ]
+}])
+```
+
+If the user says the config is wrong, ask them to provide the correct values.
 
 ---
 
@@ -101,7 +142,20 @@ Ask the user or read the code to find which code path is being analyzed:
 
 ### 2.2 Map code to operator names
 
-**List your understanding explicitly and get confirmation:**
+**List your understanding explicitly with the `question` tool:**
+
+```python
+question(questions=[{
+    "header": "确认算子映射",
+    "question": "以下算子映射关系是否正确？",
+    "options": [
+        {"label": "映射正确", "description": "继续分析"},
+        {"label": "有误，部分不对", "description": "我来纠正"}
+    ]
+}])
+```
+
+Present your mapping in the question description like:
 
 ```
 My understanding of the operator mappings:
@@ -111,12 +165,13 @@ My understanding of the operator mappings:
   q_quant         → DynamicQuant_xxx
   QLI             → QuantLightningIndexer_xxx
   QKV projection  → QuantBatchMatmulV3_xxx
-
-Is this correct?
 ```
 
 DO NOT assume. The `QuantBatchMatmulV3` operator could be QKV attention or
-weights_proj depending on the model. ASK FIRST.
+weights_proj depending on the model. ASK FIRST via the `question` tool.
+
+If the user selects "有误，部分不对", wait for them to provide corrections
+before proceeding.
 
 ### 2.3 Identify relevant stream IDs
 
@@ -146,12 +201,25 @@ JOIN STRING_IDS s ON cti.name = s.id
 GROUP BY t.streamId ORDER BY t.streamId
 ```
 
-### 3.2 Present findings to the user
+### 3.2 Present findings with the `question` tool
 
-Show the result table and let the user interpret it before you do. Ask:
-- "Which of these streams do you think is the main DSA stream?"
-- "Do you see a stream that only has weights_proj?"
-- "Are any streams unexpected?"
+After showing the data table, use the `question` tool to let the user
+identify the stream roles:
+
+```python
+question(questions=[{
+    "header": "确认流角色",
+    "question": "根据以上数据，你认为哪个流是 DSA 子流？",
+    "options": [
+        {"label": "流XX是子流", "description": "该流只有 weights_proj，无其他 DSA 算子"},
+        {"label": "流YY是子流", "description": "描述你的理由"},
+        {"label": "看不出，继续分析", "description": "我来补充其他信息"}
+    ]
+}])
+```
+
+Let the user interpret the data before you do. If they disagree with your
+preliminary assessment, adjust accordingly.
 
 **Do NOT jump to conclusions about which stream is "main" vs "sub" without
 the user's input.** The user knows their configuration and architecture better
@@ -210,14 +278,24 @@ ORDER BY startNs
 
 ### 4.3 Time offset critical check
 
-When the user says "from 694ms", ALWAYS clarify the reference point:
-- From the start of which stream?
-- Absolute or relative timestamp?
-- Confirm the baseline before running the query
+When the user says "from 694ms", ALWAYS clarify the reference point using
+the `question` tool:
+
+```python
+question(questions=[{
+    "header": "确认时间偏移",
+    "question": "你说的 694ms 是从哪个流开始算的？",
+    "options": [
+        {"label": "从子流(63)起点", "description": "流63起点 + 694ms"},
+        {"label": "从主流(64)起点", "description": "流64起点 + 694ms"},
+        {"label": "绝对时间戳", "description": "我提供具体的绝对时间戳"}
+    ]
+}])
+```
 
 **Common mistake**: computing relative time from the wrong stream's startNs.
 The same relative offset can mean different absolute times for different
-streams.
+streams (as much as 13+ms apart).
 
 ### 4.4 Stream sync verification
 
